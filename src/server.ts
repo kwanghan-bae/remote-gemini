@@ -12,7 +12,9 @@ dotenv.config();
 
 const app = express();
 
-// Rate Limit 설정: 15분 동안 IP당 최대 100회 요청 허용
+/**
+ * 보안을 위한 Rate Limit 설정: 15분 동안 IP당 최대 100회 요청으로 제한하여 무차별 대입 공격을 방지합니다.
+ */
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -24,12 +26,34 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(express.static(path.join(__dirname, '../public')));
 
+/**
+ * HTTP 서버 인스턴스: Express 앱을 기반으로 생성하며 WebSocket 서버와 공유합니다.
+ */
 const server = http.createServer(app);
+
+/**
+ * WebSocket 서버 인스턴스: 클라이언트와의 실시간 양방향 통신 및 터미널 스트리밍을 담당합니다.
+ */
 const wss = new WebSocketServer({ server });
 
+/**
+ * 서버 포트 설정: 환경 변수(PORT)를 우선하며 기본값은 3000입니다.
+ */
 const PORT = Number(process.env.PORT) || 3000;
+
+/**
+ * 실행 쉘 설정: OS에 따라 Windows는 powershell, 나머지는 zsh(또는 기본 쉘)을 사용합니다.
+ */
 const SHELL = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
+
+/**
+ * Gemini CLI 실행 경로: 환경 변수(GEMINI_CLI_PATH)를 사용하며 기본값은 'gemini'입니다.
+ */
 const GEMINI_CLI_PATH = process.env.GEMINI_CLI_PATH || 'gemini';
+
+/**
+ * 인증 토큰: 외부 접근을 제어하기 위한 비밀번호입니다. .env 파일에서 설정합니다.
+ */
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 
 interface Session {
@@ -37,6 +61,10 @@ interface Session {
   timer?: NodeJS.Timeout;
 }
 
+/**
+ * 다중 세션 관리 맵: 토큰과 탭 ID를 조합하여 유저별/탭별 독립적인 PTY 프로세스를 관리합니다.
+ * 구조: Map<Token, Map<TabId, Session>>
+ */
 const userSessions = new Map<string, Map<string, Session>>();
 
 wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
@@ -53,7 +81,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   const isTest = process.env.NODE_ENV === 'test';
-  
+
   if (!userSessions.has(token)) {
     userSessions.set(token, new Map());
   }
@@ -65,7 +93,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       clearTimeout(session.timer);
       session.timer = undefined;
     }
-    console.log(`[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
+    console.log(
+      `[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
+    );
   } else {
     try {
       const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
@@ -77,7 +107,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       });
       session = { pty: ptyProcess };
       if (!isTest) tabs.set(tabId, session);
-      console.log(`[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
+      console.log(
+        `[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
+      );
     } catch (err) {
       console.error(`[PTY] 프로세스 생성 실패: ${err}`);
       ws.send('\x1b[31m[System] 내부 서버 오류로 프로세스를 시작할 수 없습니다.\x1b[0m\r\n');
@@ -106,17 +138,24 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   });
 
   ws.on('close', (code, reason) => {
-    console.log(`[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`);
+    console.log(
+      `[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`,
+    );
     if (isTest) {
       ptyProcess.kill();
       tabs.delete(tabId);
     } else if (session) {
-      session.timer = setTimeout(() => {
-        console.log(`[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`);
-        ptyProcess.kill();
-        tabs.delete(tabId);
-        if (tabs.size === 0) userSessions.delete(token);
-      }, 5 * 60 * 1000);
+      session.timer = setTimeout(
+        () => {
+          console.log(
+            `[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`,
+          );
+          ptyProcess.kill();
+          tabs.delete(tabId);
+          if (tabs.size === 0) userSessions.delete(token);
+        },
+        5 * 60 * 1000,
+      );
     }
   });
 
@@ -125,7 +164,10 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   });
 });
 
-function getLocalExternalIPs() {
+/**
+ * 로컬 네트워크의 외부 IP 주소들을 추출하여 스마트폰 접속을 돕는 유틸리티 함수입니다.
+ */
+export function getLocalExternalIPs() {
   const interfaces = os.networkInterfaces();
   const addresses: string[] = [];
   for (const name of Object.keys(interfaces)) {
@@ -147,7 +189,7 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`로컬 접속: http://localhost:${PORT}/?token=${AUTH_TOKEN}`);
     const ips = getLocalExternalIPs();
     if (ips.length > 0) {
-      ips.forEach(ip => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
+      ips.forEach((ip) => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
     }
     console.log('------------------------------------------------\n');
   });
