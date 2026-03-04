@@ -72,6 +72,7 @@ export function getVerifiedGeminiPath(): string {
     '/usr/local/bin/gemini',
     '/opt/homebrew/bin/gemini',
     path.join(os.homedir(), '.npm-global/bin/gemini'),
+    '/Users/joel/.nvm/versions/node/v24.9.0/bin/gemini', // 실측된 nvm 경로 추가
   ];
 
   for (const p of commonPaths) {
@@ -148,7 +149,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
         cols: 80,
         rows: 24,
         cwd: process.env.HOME || process.cwd(),
-        env: { ...process.env, TERM: 'xterm-256color' } as any,
+        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as any,
       });
       session = { pty: ptyProcess };
       if (!isTest) tabs.set(tabId, session);
@@ -220,7 +221,8 @@ export function getLocalExternalIPs() {
     if (!iface) continue;
     for (const config of iface) {
       if (config.family === 'IPv4' && !config.internal) {
-        addresses.push(config.address);
+        const isPrivate = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(config.address);
+        if (isPrivate) addresses.push(config.address);
       }
     }
   }
@@ -236,6 +238,7 @@ if (process.env.NODE_ENV !== 'test') {
 
     const ips = getLocalExternalIPs();
     if (ips.length > 0) {
+      console.log('\n📱 스마트폰 접속 주소:');
       ips.forEach((ip) => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
     }
     console.log('------------------------------------------------\n');
