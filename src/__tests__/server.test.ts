@@ -1,5 +1,12 @@
 import request from 'supertest';
-import { app, server, wss, getLocalExternalIPs } from '../server';
+import {
+  app,
+  server,
+  wss,
+  getLocalExternalIPs,
+  getVerifiedGeminiPath,
+  verifyCliReady,
+} from '../server';
 import WebSocket from 'ws';
 import * as pty from 'node-pty';
 import { AddressInfo } from 'net';
@@ -117,5 +124,36 @@ describe('100% Logic Coverage Integration Tests', () => {
   test('IP 추출 유틸리티 getLocalExternalIPs 검증', () => {
     const ips = getLocalExternalIPs();
     expect(Array.isArray(ips)).toBe(true);
+  });
+
+  test('Gemini CLI 경로 탐색 로직 검증', () => {
+    const path = getVerifiedGeminiPath();
+    expect(typeof path).toBe('string');
+    expect(path.length).toBeGreaterThan(0);
+  });
+
+  test('CLI 탐색 실패 시 기본값 반환 검증', () => {
+    // execSync를 모킹하여 에러 발생 유도
+    const childProcess = require('child_process');
+    const originalExec = childProcess.execSync;
+    childProcess.execSync = jest.fn(() => {
+      throw new Error('not found');
+    });
+
+    // 환경 변수 일시 제거
+    const originalEnv = process.env.GEMINI_CLI_PATH;
+    delete process.env.GEMINI_CLI_PATH;
+
+    const path = getVerifiedGeminiPath();
+    expect(path).toBe('gemini');
+
+    // 복구
+    childProcess.execSync = originalExec;
+    process.env.GEMINI_CLI_PATH = originalEnv;
+  });
+
+  test('verifyCliReady 함수 실행 시 예외 발생 여부 확인', () => {
+    // 실제 명령어를 실행하므로 에러가 나지 않는지만 확인
+    expect(() => verifyCliReady()).not.toThrow();
   });
 });

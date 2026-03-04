@@ -8,6 +8,7 @@ import os from 'os';
 import url from 'url';
 import rateLimit from 'express-rate-limit';
 import { execSync } from 'child_process';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -48,22 +49,53 @@ const PORT = Number(process.env.PORT) || 3000;
 const SHELL = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
 /**
- * Gemini CLI 실행 경로 자동 탐색 함수: 시스템 경로(PATH)에서 'gemini' 명령어를 찾아 전체 경로를 반환합니다.
+ * Gemini CLI 실행 경로 자동 탐색 및 검증 함수:
+ * 시스템 PATH를 전수 조사하고 실제 실행 가능 여부를 확인합니다.
  */
-function findGeminiPath(): string {
-  if (process.env.GEMINI_CLI_PATH) return process.env.GEMINI_CLI_PATH;
-
-  try {
-    const command = os.platform() === 'win32' ? 'where gemini' : 'which gemini';
-    const result = execSync(command, { encoding: 'utf8' }).trim().split('\n')[0];
-    return result;
-  } catch (err) {
-    // 탐색 실패 시 기본 명령어 시도
-    return 'gemini';
+export function getVerifiedGeminiPath(): string {
+  // 1. .env 설정 우선
+  if (process.env.GEMINI_CLI_PATH && fs.existsSync(process.env.GEMINI_CLI_PATH)) {
+    return process.env.GEMINI_CLI_PATH;
   }
+
+  // 2. 시스템 명령어(which/where)로 탐색
+  try {
+    const lookupCmd = os.platform() === 'win32' ? 'where gemini' : 'which gemini';
+    const foundPath = execSync(lookupCmd, { encoding: 'utf8' }).trim().split('\n')[0];
+    if (foundPath && fs.existsSync(foundPath)) return foundPath;
+  } catch (e) {
+    // lookup 실패 시 계속 진행
+  }
+
+  // 3. 일반적인 npm 전역 설치 경로 추론 (nvm 포함)
+  const commonPaths = [
+    '/usr/local/bin/gemini',
+    '/opt/homebrew/bin/gemini',
+    path.join(os.homedir(), '.npm-global/bin/gemini'),
+  ];
+
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+
+  // 4. 마지막 보루: 환경 변수 무시하고 명령어만 반환
+  return 'gemini';
 }
 
-const GEMINI_CLI_PATH = findGeminiPath();
+const GEMINI_CLI_PATH = getVerifiedGeminiPath();
+
+/**
+ * 서버 시작 전 CLI 가용성 최종 검증 함수입니다.
+ */
+export function verifyCliReady() {
+  try {
+    execSync(`${GEMINI_CLI_PATH} --help`, { stdio: 'ignore' });
+    console.log(`✅ Gemini CLI 탐색 완료: ${GEMINI_CLI_PATH}`);
+  } catch (e) {
+    console.warn(`⚠️ 경고: '${GEMINI_CLI_PATH}' 명령어를 실행할 수 없습니다.`);
+    console.warn(`명령어 'npm install -g @google/gemini-cli'로 설치되어 있는지 확인하세요.\n`);
+  }
+}
 
 /**
  * 인증 토큰: 외부 접근을 제어하기 위한 비밀번호입니다. .env 파일에서 설정합니다.
@@ -94,7 +126,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   const isTest = process.env.NODE_ENV === 'test';
-  
+
   if (!userSessions.has(token)) {
     userSessions.set(token, new Map());
   }
@@ -106,7 +138,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       clearTimeout(session.timer);
       session.timer = undefined;
     }
-    console.log(`[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
+    console.log(
+      `[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
+    );
   } else {
     try {
       const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
@@ -118,7 +152,9 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       });
       session = { pty: ptyProcess };
       if (!isTest) tabs.set(tabId, session);
-      console.log(`[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
+      console.log(
+        `[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
+      );
     } catch (err) {
       console.error(`[PTY] 프로세스 생성 실패: ${err}`);
       ws.send('\x1b[31m[System] 내부 서버 오류로 프로세스를 시작할 수 없습니다.\x1b[0m\r\n');
@@ -147,17 +183,24 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   });
 
   ws.on('close', (code, reason) => {
-    console.log(`[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`);
+    console.log(
+      `[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`,
+    );
     if (isTest) {
       ptyProcess.kill();
       tabs.delete(tabId);
     } else if (session) {
-      session.timer = setTimeout(() => {
-        console.log(`[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`);
-        ptyProcess.kill();
-        tabs.delete(tabId);
-        if (tabs.size === 0) userSessions.delete(token);
-      }, 5 * 60 * 1000);
+      session.timer = setTimeout(
+        () => {
+          console.log(
+            `[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`,
+          );
+          ptyProcess.kill();
+          tabs.delete(tabId);
+          if (tabs.size === 0) userSessions.delete(token);
+        },
+        5 * 60 * 1000,
+      );
     }
   });
 
@@ -188,12 +231,12 @@ if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, '0.0.0.0', () => {
     console.log('\n🛡️ Gemini CLI Remote Bridge V2 (Secure Mode)');
     console.log('------------------------------------------------');
+    verifyCliReady();
     console.log(`로컬 접속: http://localhost:${PORT}/?token=${AUTH_TOKEN}`);
-    console.log(`CLI 경로: ${GEMINI_CLI_PATH}`);
-    
+
     const ips = getLocalExternalIPs();
     if (ips.length > 0) {
-      ips.forEach(ip => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
+      ips.forEach((ip) => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
     }
     console.log('------------------------------------------------\n');
   });
