@@ -28,21 +28,42 @@ const maxReconnectDelay = 30000;
 
 function connect() {
   socket = new WebSocket(wsUrl);
+// 초기 리사이즈 전송 및 툴바 설정
+socket.onopen = () => {
+  console.log('WebSocket 연결 성공 (세션 유지 모드)');
+  reconnectAttempts = 0;
+  term.write('\x1b[32m[System] 연결되었습니다. (기존 세션이 있다면 복구됩니다)\x1b[0m\r\n');
 
-  socket.onopen = () => {
-    console.log('WebSocket 연결 성공 (세션 유지 모드)');
-    reconnectAttempts = 0;
-    term.write('\x1b[32m[System] 연결되었습니다. (기존 세션이 있다면 복구됩니다)\x1b[0m\r\n');
-    
-    // 초기 터미널 크기 전송
-    socket.send(
-      JSON.stringify({
-        type: 'resize',
-        cols: term.cols,
-        rows: term.rows,
-      }),
-    );
+  // 초기 터미널 크기 전송
+  socket.send(
+    JSON.stringify({
+      type: 'resize',
+      cols: term.cols,
+      rows: term.rows,
+    }),
+  );
+
+  // 가상 키보드 툴바 로직
+  const keys = {
+    'ESC': '\x1b',
+    'TAB': '\t',
+    'CTRL_C': '\x03',
+    'UP': '\x1b[A',
+    'DOWN': '\x1b[B',
+    'LEFT': '\x1b[D',
+    'RIGHT': '\x1b[C'
   };
+
+  document.querySelectorAll('.key').forEach(button => {
+    button.onclick = (e) => {
+      const key = e.target.getAttribute('data-key');
+      if (keys[key] && socket.readyState === WebSocket.OPEN) {
+        socket.send(keys[key]);
+        term.focus(); // 버튼 클릭 후 터미널로 포커스 이동
+      }
+    };
+  });
+};
 
   socket.onmessage = (event) => {
     term.write(event.data);
