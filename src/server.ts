@@ -7,6 +7,7 @@ import * as pty from 'node-pty';
 import os from 'os';
 import url from 'url';
 import rateLimit from 'express-rate-limit';
+import { execSync } from 'child_process';
 
 dotenv.config();
 
@@ -47,9 +48,22 @@ const PORT = Number(process.env.PORT) || 3000;
 const SHELL = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
 /**
- * Gemini CLI 실행 경로: 환경 변수(GEMINI_CLI_PATH)를 사용하며 기본값은 'gemini'입니다.
+ * Gemini CLI 실행 경로 자동 탐색 함수: 시스템 경로(PATH)에서 'gemini' 명령어를 찾아 전체 경로를 반환합니다.
  */
-const GEMINI_CLI_PATH = process.env.GEMINI_CLI_PATH || 'gemini';
+function findGeminiPath(): string {
+  if (process.env.GEMINI_CLI_PATH) return process.env.GEMINI_CLI_PATH;
+
+  try {
+    const command = os.platform() === 'win32' ? 'where gemini' : 'which gemini';
+    const result = execSync(command, { encoding: 'utf8' }).trim().split('\n')[0];
+    return result;
+  } catch (err) {
+    // 탐색 실패 시 기본 명령어 시도
+    return 'gemini';
+  }
+}
+
+const GEMINI_CLI_PATH = findGeminiPath();
 
 /**
  * 인증 토큰: 외부 접근을 제어하기 위한 비밀번호입니다. .env 파일에서 설정합니다.
@@ -63,7 +77,6 @@ interface Session {
 
 /**
  * 다중 세션 관리 맵: 토큰과 탭 ID를 조합하여 유저별/탭별 독립적인 PTY 프로세스를 관리합니다.
- * 구조: Map<Token, Map<TabId, Session>>
  */
 const userSessions = new Map<string, Map<string, Session>>();
 
@@ -81,7 +94,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   const isTest = process.env.NODE_ENV === 'test';
-
+  
   if (!userSessions.has(token)) {
     userSessions.set(token, new Map());
   }
@@ -93,9 +106,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       clearTimeout(session.timer);
       session.timer = undefined;
     }
-    console.log(
-      `[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
-    );
+    console.log(`[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
   } else {
     try {
       const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
@@ -107,9 +118,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       });
       session = { pty: ptyProcess };
       if (!isTest) tabs.set(tabId, session);
-      console.log(
-        `[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
-      );
+      console.log(`[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
     } catch (err) {
       console.error(`[PTY] 프로세스 생성 실패: ${err}`);
       ws.send('\x1b[31m[System] 내부 서버 오류로 프로세스를 시작할 수 없습니다.\x1b[0m\r\n');
@@ -138,24 +147,17 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   });
 
   ws.on('close', (code, reason) => {
-    console.log(
-      `[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`,
-    );
+    console.log(`[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`);
     if (isTest) {
       ptyProcess.kill();
       tabs.delete(tabId);
     } else if (session) {
-      session.timer = setTimeout(
-        () => {
-          console.log(
-            `[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`,
-          );
-          ptyProcess.kill();
-          tabs.delete(tabId);
-          if (tabs.size === 0) userSessions.delete(token);
-        },
-        5 * 60 * 1000,
-      );
+      session.timer = setTimeout(() => {
+        console.log(`[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`);
+        ptyProcess.kill();
+        tabs.delete(tabId);
+        if (tabs.size === 0) userSessions.delete(token);
+      }, 5 * 60 * 1000);
     }
   });
 
@@ -187,9 +189,11 @@ if (process.env.NODE_ENV !== 'test') {
     console.log('\n🛡️ Gemini CLI Remote Bridge V2 (Secure Mode)');
     console.log('------------------------------------------------');
     console.log(`로컬 접속: http://localhost:${PORT}/?token=${AUTH_TOKEN}`);
+    console.log(`CLI 경로: ${GEMINI_CLI_PATH}`);
+    
     const ips = getLocalExternalIPs();
     if (ips.length > 0) {
-      ips.forEach((ip) => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
+      ips.forEach(ip => console.log(`👉 http://${ip}:${PORT}/?token=${AUTH_TOKEN}`));
     }
     console.log('------------------------------------------------\n');
   });
