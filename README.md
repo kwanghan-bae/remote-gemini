@@ -12,8 +12,8 @@
 ```env
 PORT=3000
 AUTH_TOKEN=내가_정할_비밀번호 (예: super-secret-123)
-GEMINI_CLI_PATH=gemini
 ```
+> **Tip!** Gemini CLI 경로는 서버가 실행될 때 **자동으로 탐색**하므로 따로 설정할 필요가 없습니다.
 > **주의!** `.env.example` 파일을 참고하셔도 좋지만, 직접 `.env` 파일을 만드셔야 서버가 작동합니다.
 
 ### 2. 서버 실행하기 (내 PC)
