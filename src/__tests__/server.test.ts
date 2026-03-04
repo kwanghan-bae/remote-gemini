@@ -133,14 +133,17 @@ describe('100% Logic Coverage Integration Tests', () => {
   });
 
   test('CLI 탐색 실패 시 기본값 반환 검증', () => {
-    // execSync를 모킹하여 에러 발생 유도
+    // fs와 child_process 모킹
+    const fs = require('fs');
     const childProcess = require('child_process');
+    const originalExists = fs.existsSync;
     const originalExec = childProcess.execSync;
+
+    fs.existsSync = jest.fn(() => false);
     childProcess.execSync = jest.fn(() => {
       throw new Error('not found');
     });
 
-    // 환경 변수 일시 제거
     const originalEnv = process.env.GEMINI_CLI_PATH;
     delete process.env.GEMINI_CLI_PATH;
 
@@ -148,6 +151,7 @@ describe('100% Logic Coverage Integration Tests', () => {
     expect(path).toBe('gemini');
 
     // 복구
+    fs.existsSync = originalExists;
     childProcess.execSync = originalExec;
     process.env.GEMINI_CLI_PATH = originalEnv;
   });

@@ -44,11 +44,6 @@ const wss = new WebSocketServer({ server });
 const PORT = Number(process.env.PORT) || 3000;
 
 /**
- * 실행 쉘 설정: OS에 따라 Windows는 powershell, 나머지는 zsh(또는 기본 쉘)을 사용합니다.
- */
-const SHELL = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
-
-/**
  * Gemini CLI 실행 경로 자동 탐색 및 검증 함수:
  * 시스템 PATH를 전수 조사하고 실제 실행 가능 여부를 확인합니다.
  */
@@ -63,26 +58,26 @@ export function getVerifiedGeminiPath(): string {
     const lookupCmd = os.platform() === 'win32' ? 'where gemini' : 'which gemini';
     const foundPath = execSync(lookupCmd, { encoding: 'utf8' }).trim().split('\n')[0];
     if (foundPath && fs.existsSync(foundPath)) return foundPath;
-  } catch (e) {
-    // lookup 실패 시 계속 진행
-  }
+  } catch (e) {}
 
-  // 3. 일반적인 npm 전역 설치 경로 추론 (nvm 포함)
+  // 3. 일반적인 npm 전역 설치 경로 추론
   const commonPaths = [
     '/usr/local/bin/gemini',
     '/opt/homebrew/bin/gemini',
     path.join(os.homedir(), '.npm-global/bin/gemini'),
-    '/Users/joel/.nvm/versions/node/v24.9.0/bin/gemini', // 실측된 nvm 경로 추가
+    '/Users/joel/.nvm/versions/node/v24.9.0/bin/gemini',
   ];
 
   for (const p of commonPaths) {
     if (fs.existsSync(p)) return p;
   }
 
-  // 4. 마지막 보루: 환경 변수 무시하고 명령어만 반환
   return 'gemini';
 }
 
+/**
+ * 실측 및 자동 탐색을 통해 확정된 Gemini CLI의 실제 실행 경로입니다.
+ */
 const GEMINI_CLI_PATH = getVerifiedGeminiPath();
 
 /**
@@ -144,7 +139,8 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     );
   } else {
     try {
-      const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
+      // 보완: Gemini CLI를 직접 실행하며 -y (YOLO) 옵션을 기본으로 부여합니다.
+      const ptyProcess = pty.spawn(GEMINI_CLI_PATH, ['-y'], {
         name: 'xterm-256color',
         cols: 80,
         rows: 24,
@@ -153,9 +149,7 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       });
       session = { pty: ptyProcess };
       if (!isTest) tabs.set(tabId, session);
-      console.log(
-        `[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`,
-      );
+      console.log(`[Session] 새 탭 시작 (Command: gemini -y, Tab: ${tabId})`);
     } catch (err) {
       console.error(`[PTY] 프로세스 생성 실패: ${err}`);
       ws.send('\x1b[31m[System] 내부 서버 오류로 프로세스를 시작할 수 없습니다.\x1b[0m\r\n');
