@@ -6,10 +6,24 @@ import dotenv from 'dotenv';
 import * as pty from 'node-pty';
 import os from 'os';
 import url from 'url';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
 const app = express();
+
+// Rate Limit 설정: 15분 동안 IP당 최대 100회 요청 허용
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: '너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요.',
+});
+
+app.use(limiter);
+app.use(express.static(path.join(__dirname, '../public')));
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -23,10 +37,7 @@ interface Session {
   timer?: NodeJS.Timeout;
 }
 
-// 다중 세션 구조: Map<Token, Map<TabId, Session>>
 const userSessions = new Map<string, Map<string, Session>>();
-
-app.use(express.static(path.join(__dirname, '../public')));
 
 wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   const ip = req.socket.remoteAddress;
@@ -35,14 +46,14 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
   const tabId = (parsedUrl.query.tabId as string) || 'default';
 
   if (AUTH_TOKEN && token !== AUTH_TOKEN) {
+    console.warn(`[Security] 유효하지 않은 토큰 접근 차단 (IP: ${ip}, Tab: ${tabId})`);
     ws.send('\x1b[31m[Security] 인증 토큰이 유효하지 않습니다.\x1b[0m\r\n');
-    ws.close();
+    ws.close(1008, 'Policy Violation');
     return;
   }
 
   const isTest = process.env.NODE_ENV === 'test';
   
-  // 유저의 세션 맵 가져오기
   if (!userSessions.has(token)) {
     userSessions.set(token, new Map());
   }
@@ -54,18 +65,25 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
       clearTimeout(session.timer);
       session.timer = undefined;
     }
-    console.log(`[Session] 탭 재연결 (Token: ${token}, Tab: ${tabId})`);
+    console.log(`[Session] 탭 재연결 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
   } else {
-    const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      cwd: process.env.HOME || process.cwd(),
-      env: { ...process.env, TERM: 'xterm-256color' } as any,
-    });
-    session = { pty: ptyProcess };
-    if (!isTest) tabs.set(tabId, session);
-    console.log(`[Session] 새 탭 시작 (Token: ${token}, Tab: ${tabId})`);
+    try {
+      const ptyProcess = pty.spawn(SHELL, [GEMINI_CLI_PATH], {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        cwd: process.env.HOME || process.cwd(),
+        env: { ...process.env, TERM: 'xterm-256color' } as any,
+      });
+      session = { pty: ptyProcess };
+      if (!isTest) tabs.set(tabId, session);
+      console.log(`[Session] 새 탭 시작 (Token: ${token.substring(0, 4)}***, Tab: ${tabId}, IP: ${ip})`);
+    } catch (err) {
+      console.error(`[PTY] 프로세스 생성 실패: ${err}`);
+      ws.send('\x1b[31m[System] 내부 서버 오류로 프로세스를 시작할 수 없습니다.\x1b[0m\r\n');
+      ws.close();
+      return;
+    }
   }
 
   const ptyProcess = session.pty;
@@ -87,19 +105,23 @@ wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     }
   });
 
-  ws.on('close', () => {
-    console.log(`[WebSocket] 연결 일시 중단: ${ip} (Tab: ${tabId})`);
+  ws.on('close', (code, reason) => {
+    console.log(`[WebSocket] 연결 종료 (IP: ${ip}, Tab: ${tabId}, Code: ${code}, Reason: ${reason})`);
     if (isTest) {
       ptyProcess.kill();
       tabs.delete(tabId);
     } else if (session) {
       session.timer = setTimeout(() => {
-        console.log(`[Session] 탭 만료 및 종료 (Token: ${token}, Tab: ${tabId})`);
+        console.log(`[Session] 세션 만료 및 정리 (Token: ${token.substring(0, 4)}***, Tab: ${tabId})`);
         ptyProcess.kill();
         tabs.delete(tabId);
         if (tabs.size === 0) userSessions.delete(token);
       }, 5 * 60 * 1000);
     }
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[WebSocket] 에러 발생 (IP: ${ip}): ${err.message}`);
   });
 });
 
@@ -120,7 +142,7 @@ function getLocalExternalIPs() {
 
 if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log('\n🚀 Gemini CLI Remote Bridge V2 실행 중');
+    console.log('\n🛡️ Gemini CLI Remote Bridge V2 (Secure Mode)');
     console.log('------------------------------------------------');
     console.log(`로컬 접속: http://localhost:${PORT}/?token=${AUTH_TOKEN}`);
     const ips = getLocalExternalIPs();
